@@ -17,9 +17,9 @@ This document tracks the migration of SimToolReal from Isaac Gym Preview 4 to Is
 | `isaacgymenvs/tasks/simtoolreal/env.py` | `isaaclab_tasks/simtoolreal/env.py` | Phase 1 complete |
 | `isaacgymenvs/tasks/base/vec_task.py` | Isaac Lab `DirectRLEnv` (built-in) | Replaced |
 | `isaacgymenvs/cfg/task/SimToolReal.yaml` | `isaaclab_tasks/simtoolreal/env_cfg.py` | Phase 1 complete |
-| `isaacgymenvs/cfg/train/*.yaml` | TBD (Phase 2) | Not started |
-| `isaacgymenvs/train.py` | `isaaclab_tasks/simtoolreal/train.py` | Skeleton only |
-| `isaacgymenvs/utils/rlgames_utils.py` | Isaac Lab built-in rl_games wrapper | Phase 2 |
+| `isaacgymenvs/cfg/train/*.yaml` | `isaaclab_tasks/simtoolreal/agents/*.yaml` | Phase 2 complete |
+| `isaacgymenvs/train.py` | `isaaclab_tasks/simtoolreal/train.py` | Phase 2 complete |
+| `isaacgymenvs/utils/rlgames_utils.py` | `isaaclab_rl.rl_games` (Isaac Lab built-in) | Phase 2 complete |
 | `isaacgymenvs/utils/dr_utils.py` | Isaac Lab `EventCfg` / `mdp` randomization | Phase 3 |
 | `isaacgymenvs/utils/observation_action_utils_sharpa.py` | Inlined into `env.py` | Phase 1 complete |
 | `deployment/isaac/isaac_env*.py` | TBD (Phase 4) | Not started |
@@ -64,12 +64,50 @@ This document tracks the migration of SimToolReal from Isaac Gym Preview 4 to Is
 | `gymapi.Transform` / `Vec3` / `Quat` | Plain torch tensors |
 | Domain randomization `dr_utils.py` | `EventCfg` with `EventTerm` + `mdp.*` functions |
 
-## Phase 2: rl_games Training Integration
+## Phase 2: rl_games Training Integration (Complete)
 
-Connect the Isaac Lab environment to the local rl_games fork (with SAPG):
-- Use Isaac Lab's built-in rl_games wrapper or adapt `rlgames_utils.py`
-- Preserve `ComplexObsRLGPUEnv` for asymmetric actor-critic
-- Port YAML training configs to work with Isaac Lab's runner
+The training pipeline uses Isaac Lab's built-in `RlGamesVecEnvWrapper` and `RlGamesGpuEnv` from `isaaclab_rl.rl_games`, which replaces the original `ComplexObsRLGPUEnv` / `RLGPUEnv` wrappers.
+
+### New files
+- `isaaclab_tasks/simtoolreal/agents/rl_games_ppo_cfg.yaml` — MLP asymmetric PPO config
+- `isaaclab_tasks/simtoolreal/agents/rl_games_ppo_lstm_cfg.yaml` — LSTM asymmetric PPO config (paper default)
+- `isaaclab_tasks/simtoolreal/train.py` — Full training script following Isaac Lab's pattern
+- `isaaclab_tasks/simtoolreal/play.py` — Inference/play script
+
+### Registered Gymnasium environments
+- `Isaac-SimToolReal-Direct-v0` — MLP asymmetric PPO
+- `Isaac-SimToolReal-LSTM-Direct-v0` — LSTM asymmetric PPO (paper default)
+
+### Observation flow (asymmetric actor-critic)
+```
+DirectRLEnv._get_observations()
+  → {"policy": actor_obs_tensor, "critic": critic_obs_tensor}
+  ↓
+RlGamesVecEnvWrapper._process_obs() with obs_groups={"obs": ["policy"], "states": ["critic"]}
+  → {"obs": actor_obs_tensor, "states": critic_obs_tensor}
+  ↓
+rl_games Runner → A2CAgent
+  - Actor network receives "obs"
+  - Central value network (critic) receives "states"
+```
+
+### SAPG support
+The SAPG exploration parameters (`expl_type`, `expl_coef_block_size`, etc.) are included in the agent YAML configs. They work with the local rl_games fork which implements the SAPG algorithm in `a2c_common.py`. Set `expl_type: 'mixed_expl'` or `'mixed_expl_disjoint'` in the agent config to enable SAPG.
+
+### Training commands
+```bash
+# LSTM asymmetric (paper default):
+python isaaclab_tasks/simtoolreal/train.py --task Isaac-SimToolReal-LSTM-Direct-v0 --num_envs 8192 --headless
+
+# MLP asymmetric:
+python isaaclab_tasks/simtoolreal/train.py --task Isaac-SimToolReal-Direct-v0 --num_envs 8192 --headless
+
+# Resume from checkpoint:
+python isaaclab_tasks/simtoolreal/train.py --task Isaac-SimToolReal-LSTM-Direct-v0 --checkpoint path/to/model.pth
+
+# Inference:
+python isaaclab_tasks/simtoolreal/play.py --task Isaac-SimToolReal-LSTM-Direct-v0 --checkpoint path/to/model.pth --num_envs 32
+```
 
 ## Phase 3: Domain Randomization
 
