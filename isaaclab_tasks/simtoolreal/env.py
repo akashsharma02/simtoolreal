@@ -218,6 +218,9 @@ class SimToolRealEnv(DirectRLEnv):
         # Store previous fingertip distances for delta reward
         self.prev_fingertip_distances = None
 
+        # Global step counter for noise scheduling
+        self.global_step_count = 0
+
     # ------------------------------------------------------------------
     # Helpers for obs size computation (called before super().__init__)
     # ------------------------------------------------------------------
@@ -313,6 +316,13 @@ class SimToolRealEnv(DirectRLEnv):
         exponential moving average smoothing.
         """
         self.actions = actions.clone()
+        self.global_step_count += 1
+
+        # Apply action noise with linear schedule (ramps up over noise_schedule_steps)
+        if self.cfg.action_noise_std > 0.0:
+            schedule = min(self.global_step_count / max(self.cfg.noise_schedule_steps, 1), 1.0)
+            noise = torch.randn_like(self.actions) * self.cfg.action_noise_std * schedule
+            self.actions = self.actions + noise
 
     def _apply_action(self) -> None:
         """Apply position targets to the robot joints.
@@ -439,6 +449,12 @@ class SimToolRealEnv(DirectRLEnv):
         policy_obs_parts = [obs_dict[k] for k in self.cfg.obs_list]
         policy_obs = torch.cat(policy_obs_parts, dim=-1)
 
+        # Apply observation noise (constant schedule — full noise after noise_schedule_steps)
+        if self.cfg.obs_noise_std > 0.0:
+            schedule = 1.0 if self.global_step_count >= self.cfg.noise_schedule_steps else 0.0
+            noise = torch.randn_like(policy_obs) * self.cfg.obs_noise_std * schedule
+            policy_obs = policy_obs + noise
+
         # Clamp observations
         policy_obs = torch.clamp(
             policy_obs, -self.cfg.clamp_abs_observations, self.cfg.clamp_abs_observations
@@ -447,6 +463,7 @@ class SimToolRealEnv(DirectRLEnv):
         result = {"policy": policy_obs}
 
         # Build critic observation if state_space > 0 (asymmetric)
+        # Note: critic observations are NOT noised (privileged)
         if self.cfg.state_space > 0:
             state_obs_parts = [obs_dict[k] for k in self.cfg.state_list]
             state_obs = torch.cat(state_obs_parts, dim=-1)

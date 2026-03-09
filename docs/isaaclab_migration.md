@@ -20,7 +20,7 @@ This document tracks the migration of SimToolReal from Isaac Gym Preview 4 to Is
 | `isaacgymenvs/cfg/train/*.yaml` | `isaaclab_tasks/simtoolreal/agents/*.yaml` | Phase 2 complete |
 | `isaacgymenvs/train.py` | `isaaclab_tasks/simtoolreal/train.py` | Phase 2 complete |
 | `isaacgymenvs/utils/rlgames_utils.py` | `isaaclab_rl.rl_games` (Isaac Lab built-in) | Phase 2 complete |
-| `isaacgymenvs/utils/dr_utils.py` | Isaac Lab `EventCfg` / `mdp` randomization | Phase 3 |
+| `isaacgymenvs/utils/dr_utils.py` | Isaac Lab `EventCfg` / `mdp` randomization | Phase 3 complete |
 | `isaacgymenvs/utils/observation_action_utils_sharpa.py` | Inlined into `env.py` | Phase 1 complete |
 | `deployment/isaac/isaac_env*.py` | TBD (Phase 4) | Not started |
 
@@ -109,14 +109,36 @@ python isaaclab_tasks/simtoolreal/train.py --task Isaac-SimToolReal-LSTM-Direct-
 python isaaclab_tasks/simtoolreal/play.py --task Isaac-SimToolReal-LSTM-Direct-v0 --checkpoint path/to/model.pth --num_envs 32
 ```
 
-## Phase 3: Domain Randomization
+## Phase 3: Domain Randomization (Complete)
 
-Port the randomization from `dr_utils.py` to Isaac Lab's `EventCfg`:
-- Robot DOF properties (stiffness, damping, effort, friction, armature)
-- Robot rigid body mass
-- Object mass and friction
-- Gravity perturbation
-- Observation and action noise
+All randomization parameters from `dr_utils.py` / `SimToolReal.yaml` have been ported
+to Isaac Lab's `EventCfg` system in `env_cfg.py`.
+
+### EventCfg mapping (disabled by default, matching original `randomize: False`)
+
+| Original (Isaac Gym) | Isaac Lab EventTerm | Mode |
+|---|---|---|
+| Robot DOF stiffness/damping (loguniform ×[0.7,1.3]) | `robot_joint_stiffness_and_damping` via `mdp.randomize_actuator_gains` | reset, 720 steps |
+| Robot DOF friction/armature (uniform ×[0.7,1.3]) | `robot_joint_friction_and_armature` via `mdp.randomize_joint_parameters` | reset, 720 steps |
+| Robot rigid shape friction/restitution (100 buckets) | `robot_physics_material` via `mdp.randomize_rigid_body_material` | reset, 720 steps |
+| Robot rigid body mass (uniform ×[0.7,1.3], setup_only) | `robot_rigid_body_mass` via `mdp.randomize_rigid_body_mass` | startup |
+| Object rigid body mass (setup_only) | `object_rigid_body_mass` | startup |
+| Object rigid shape friction/restitution | `object_physics_material` | reset, 720 steps |
+| Gravity perturbation (gaussian +[0,0.3]) | `reset_gravity` via `mdp.randomize_physics_scene_gravity` | interval, 12s |
+| Observation noise (gaussian, σ=0.01, constant schedule) | `obs_noise_std` + schedule in `env.py` | per-step in `_get_observations` |
+| Action noise (gaussian, σ=0.01, linear schedule) | `action_noise_std` + schedule in `env.py` | per-step in `_pre_physics_step` |
+
+### Enabling randomization
+
+```python
+# In your config override:
+cfg = SimToolRealEnvCfg()
+cfg.events = EventCfg()  # Uncomment in env_cfg.py or set programmatically
+```
+
+### Not ported (low priority)
+- DOF `effort` limits randomization — Isaac Lab doesn't have a direct equivalent in `randomize_joint_parameters`; would need custom EventTerm
+- Robot color randomization — cosmetic only, use `mdp.randomize_visual_color` if needed
 
 ## Phase 4: Deployment & Evaluation
 

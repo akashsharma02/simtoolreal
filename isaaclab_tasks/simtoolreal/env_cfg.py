@@ -94,28 +94,34 @@ TABLE_CFG = ArticulationCfg(
 # ---------------------------------------------------------------------------
 # Domain Randomization EventCfg
 # ---------------------------------------------------------------------------
+# Matches the original isaacgymenvs/cfg/task/SimToolReal.yaml randomization_params.
+# Original uses frequency=720 steps (~12 seconds at 60 Hz).
+# Isaac Lab's min_step_count_between_reset serves the same purpose.
+# ---------------------------------------------------------------------------
+
+_DR_FREQ = 720  # steps between randomization events (matching original)
+
 
 @configclass
 class EventCfg:
-    """Configuration for domain randomization events."""
+    """Configuration for domain randomization events.
 
-    # -- robot
-    robot_physics_material = EventTerm(
-        func=mdp.randomize_rigid_body_material,
-        mode="reset",
-        min_step_count_between_reset=720,
-        params={
-            "asset_cfg": SceneEntityCfg("robot"),
-            "static_friction_range": (0.7, 1.3),
-            "dynamic_friction_range": (0.7, 1.3),
-            "restitution_range": (0.0, 0.3),
-            "num_buckets": 100,
-        },
-    )
+    This maps every randomization parameter from the original Isaac Gym
+    SimToolReal YAML config to Isaac Lab's EventTerm system.
+
+    Original config reference: isaacgymenvs/cfg/task/SimToolReal.yaml
+    under task.randomization_params.
+    """
+
+    # =====================================================================
+    # Robot Actor
+    # =====================================================================
+
+    # -- DOF properties: stiffness and damping (loguniform scaling) --
     robot_joint_stiffness_and_damping = EventTerm(
         func=mdp.randomize_actuator_gains,
-        min_step_count_between_reset=720,
         mode="reset",
+        min_step_count_between_reset=_DR_FREQ,
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
             "stiffness_distribution_params": (0.7, 1.3),
@@ -124,10 +130,40 @@ class EventCfg:
             "distribution": "log_uniform",
         },
     )
+
+    # -- DOF properties: friction and armature (uniform scaling) --
+    robot_joint_friction_and_armature = EventTerm(
+        func=mdp.randomize_joint_parameters,
+        mode="reset",
+        min_step_count_between_reset=_DR_FREQ,
+        params={
+            "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
+            "friction_distribution_params": (0.7, 1.3),
+            "armature_distribution_params": (0.7, 1.3),
+            "operation": "scale",
+            "distribution": "uniform",
+        },
+    )
+
+    # -- Rigid shape properties: surface friction and restitution (bucketed) --
+    robot_physics_material = EventTerm(
+        func=mdp.randomize_rigid_body_material,
+        mode="reset",
+        min_step_count_between_reset=_DR_FREQ,
+        params={
+            "asset_cfg": SceneEntityCfg("robot"),
+            "static_friction_range": (0.7, 1.3),
+            "dynamic_friction_range": (0.7, 1.3),
+            "restitution_range": (0.0, 0.3),
+            "num_buckets": 100,
+        },
+    )
+
+    # -- Rigid body mass (setup_only in original, applied once at startup) --
+    # Using mode="startup" to match original setup_only=True behavior.
     robot_rigid_body_mass = EventTerm(
         func=mdp.randomize_rigid_body_mass,
-        min_step_count_between_reset=720,
-        mode="reset",
+        mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot"),
             "mass_distribution_params": (0.7, 1.3),
@@ -136,23 +172,14 @@ class EventCfg:
         },
     )
 
-    # -- object
-    object_physics_material = EventTerm(
-        func=mdp.randomize_rigid_body_material,
-        mode="reset",
-        min_step_count_between_reset=720,
-        params={
-            "asset_cfg": SceneEntityCfg("object"),
-            "static_friction_range": (0.7, 1.3),
-            "dynamic_friction_range": (0.7, 1.3),
-            "restitution_range": (0.0, 0.3),
-            "num_buckets": 100,
-        },
-    )
+    # =====================================================================
+    # Object Actor
+    # =====================================================================
+
+    # -- Rigid body mass (setup_only in original) --
     object_rigid_body_mass = EventTerm(
         func=mdp.randomize_rigid_body_mass,
-        min_step_count_between_reset=720,
-        mode="reset",
+        mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("object"),
             "mass_distribution_params": (0.7, 1.3),
@@ -161,12 +188,32 @@ class EventCfg:
         },
     )
 
-    # -- scene
+    # -- Rigid shape properties: surface friction and restitution (bucketed) --
+    object_physics_material = EventTerm(
+        func=mdp.randomize_rigid_body_material,
+        mode="reset",
+        min_step_count_between_reset=_DR_FREQ,
+        params={
+            "asset_cfg": SceneEntityCfg("object"),
+            "static_friction_range": (0.7, 1.3),
+            "dynamic_friction_range": (0.7, 1.3),
+            "restitution_range": (0.0, 0.3),
+            "num_buckets": 100,
+        },
+    )
+
+    # =====================================================================
+    # Scene Physics
+    # =====================================================================
+
+    # -- Gravity perturbation (gaussian additive) --
+    # Original: gravity range [0, 0.3] gaussian additive, frequency=720
+    # At 60 Hz, 720 steps = 12 seconds. Using interval mode with global time.
     reset_gravity = EventTerm(
         func=mdp.randomize_physics_scene_gravity,
         mode="interval",
         is_global_time=True,
-        interval_range_s=(36.0, 36.0),
+        interval_range_s=(12.0, 12.0),  # 720 steps at 60 Hz
         params={
             "gravity_distribution_params": ([0.0, 0.0, 0.0], [0.0, 0.0, 0.3]),
             "operation": "add",
@@ -366,6 +413,14 @@ class SimToolRealEnvCfg(DirectRLEnvCfg):
         "hammer", "screwdriver", "marker", "spatula", "eraser", "brush",
     ]
 
-    # ---- domain randomization (disabled by default, matching original) ----
-    # Set events to enable randomization
+    # ---- observation / action noise (applied in env, independent of EventCfg) ----
+    # Original uses gaussian noise with constant/linear schedule over 5000 steps.
+    # These are applied directly in _get_observations() and _pre_physics_step().
+    obs_noise_std: float = 0.01  # gaussian std for observation noise
+    action_noise_std: float = 0.01  # gaussian std for action noise
+    noise_schedule_steps: int = 5000  # steps to ramp up noise (linear for actions, constant for obs)
+
+    # ---- domain randomization ----
+    # Disabled by default (matching original: randomize=False).
+    # To enable, set: events = EventCfg() in your config override.
     # events: EventCfg = EventCfg()
