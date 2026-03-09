@@ -930,6 +930,61 @@ class SimToolRealEnv(DirectRLEnv):
         # Reset near-goal tracking for these envs
         self.near_goal_steps[env_ids] = 0
 
+    # ------------------------------------------------------------------
+    # Deployment-friendly state access properties
+    # ------------------------------------------------------------------
+    # These provide the same tensor names as the original Isaac Gym env
+    # so that deployment code (rl_player, eval, ROS nodes) can access
+    # simulation state without knowing the Isaac Lab API.
+
+    @property
+    def arm_hand_dof_pos(self) -> torch.Tensor:
+        """Current joint positions, shape (num_envs, 29)."""
+        return self.robot.data.joint_pos[:, :self.num_hand_arm_dofs]
+
+    @property
+    def arm_hand_dof_vel(self) -> torch.Tensor:
+        """Current joint velocities, shape (num_envs, 29)."""
+        return self.robot.data.joint_vel[:, :self.num_hand_arm_dofs]
+
+    @property
+    def object_pose(self) -> torch.Tensor:
+        """Object pose [x,y,z,qx,qy,qz,qw], shape (num_envs, 7).
+
+        Position is in local env frame (env_origins subtracted).
+        Quaternion is in xyzw convention to match the original.
+        """
+        pos = self.object.data.root_pos_w - self.scene.env_origins
+        quat_wxyz = self.object.data.root_quat_w
+        # Convert w,x,y,z -> x,y,z,w for compatibility with original
+        quat_xyzw = torch.cat([quat_wxyz[:, 1:4], quat_wxyz[:, 0:1]], dim=-1)
+        return torch.cat([pos, quat_xyzw], dim=-1)
+
+    @property
+    def goal_pose(self) -> torch.Tensor:
+        """Goal pose [x,y,z,qx,qy,qz,qw], shape (num_envs, 7)."""
+        return self.goal_states[:, :7]
+
+    @property
+    def object_scales(self) -> torch.Tensor:
+        """Object scale factors, shape (num_envs, 3)."""
+        return self.object_scale_noise_multiplier
+
+    @property
+    def num_acts(self) -> int:
+        """Number of action dimensions."""
+        return self.cfg.action_space
+
+    @property
+    def obs_list(self) -> list[str]:
+        """Policy observation list."""
+        return self.cfg.obs_list
+
+    @property
+    def joint_names(self) -> list[str]:
+        """Robot joint names (arm + hand)."""
+        return self.robot.joint_names[:self.num_hand_arm_dofs]
+
 
 # --------------------------------------------------------------------------
 # Utility functions
